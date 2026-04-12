@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.teamdesk.agent.config.AgentConfig;
 import com.teamdesk.agent.consent.ConsentService;
 import com.teamdesk.agent.dto.AgentSignalEnvelope;
+import com.teamdesk.agent.dto.InputEventPayload;
+import com.teamdesk.agent.input.RemoteInputService;
 import com.teamdesk.agent.session.AgentSessionState;
 import com.teamdesk.agent.util.JsonMapperFactory;
 import okhttp3.*;
@@ -21,6 +23,7 @@ public class AgentWebSocketClient extends WebSocketListener {
     private final AgentConfig config;
     private final ConsentService consentService;
     private final AgentSessionState sessionState;
+    private final RemoteInputService remoteInputService;
     private final ObjectMapper objectMapper = JsonMapperFactory.create();
     private final OkHttpClient httpClient = HttpClientFactory.create();
     private final ScheduledExecutorService reconnectExecutor = Executors.newSingleThreadScheduledExecutor();
@@ -32,11 +35,13 @@ public class AgentWebSocketClient extends WebSocketListener {
     public AgentWebSocketClient(
             AgentConfig config,
             ConsentService consentService,
-            AgentSessionState sessionState
+            AgentSessionState sessionState,
+            RemoteInputService remoteInputService
     ) {
         this.config = config;
         this.consentService = consentService;
         this.sessionState = sessionState;
+        this.remoteInputService = remoteInputService;
     }
 
     public synchronized void connect() {
@@ -100,6 +105,16 @@ public class AgentWebSocketClient extends WebSocketListener {
             return;
         }
 
+        if ("INPUT_EVENT".equals(type)) {
+            handleInputEvent(envelope);
+            return;
+        }
+
+        if ("SDP_OFFER".equals(type) || "ICE_CANDIDATE".equals(type)) {
+            log.warn("WS message received but not implemented yet: {}", type);
+            return;
+        }
+
         log.warn("Unsupported WS message type received: {}", type);
     }
 
@@ -146,6 +161,21 @@ public class AgentWebSocketClient extends WebSocketListener {
         if (!granted) {
             sessionState.clear();
         }
+    }
+
+    private void handleInputEvent(AgentSignalEnvelope envelope) throws Exception {
+        if (!sessionState.isConsentGranted()) {
+            log.warn("Ignoring INPUT_EVENT because consent is not granted");
+            return;
+        }
+
+        if (isBlank(envelope.getPayload())) {
+            log.warn("Ignoring INPUT_EVENT because payload is empty");
+            return;
+        }
+
+        InputEventPayload payload = objectMapper.readValue(envelope.getPayload(), InputEventPayload.class);
+        remoteInputService.handle(payload);
     }
 
     @Override

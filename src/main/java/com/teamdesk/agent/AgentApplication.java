@@ -4,6 +4,7 @@ import com.teamdesk.agent.config.AgentConfig;
 import com.teamdesk.agent.config.ConfigLoader;
 import com.teamdesk.agent.consent.ConsentService;
 import com.teamdesk.agent.identity.AgentIdentityService;
+import com.teamdesk.agent.input.RemoteInputService;
 import com.teamdesk.agent.monitoring.SystemSnapshotService;
 import com.teamdesk.agent.registration.HeartbeatService;
 import com.teamdesk.agent.registration.RegistrationClient;
@@ -24,13 +25,14 @@ public class AgentApplication {
             ConsentService consentService = new ConsentService();
             SystemSnapshotService snapshotService = new SystemSnapshotService();
             AgentSessionState sessionState = new AgentSessionState();
+            RemoteInputService remoteInputService = new RemoteInputService();
 
             RegistrationClient registrationClient =
                     new RegistrationClient(config, identityService, snapshotService);
             registrationClient.register();
 
             AgentWebSocketClient webSocketClient =
-                    new AgentWebSocketClient(config, consentService, sessionState);
+                    new AgentWebSocketClient(config, consentService, sessionState, remoteInputService);
             webSocketClient.connect();
 
             HeartbeatService heartbeatService =
