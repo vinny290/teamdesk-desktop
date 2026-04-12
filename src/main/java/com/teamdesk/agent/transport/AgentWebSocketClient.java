@@ -69,6 +69,7 @@ public class AgentWebSocketClient extends WebSocketListener implements WebRtcSig
 
         reconnectExecutor.shutdownNow();
         peerConnectionService.reset();
+        sessionState.clear();
     }
 
     @Override
@@ -122,6 +123,11 @@ public class AgentWebSocketClient extends WebSocketListener implements WebRtcSig
 
         if ("ICE_CANDIDATE".equals(type)) {
             handleIceCandidate(envelope);
+            return;
+        }
+
+        if ("STOP_SESSION".equals(type)) {
+            handleStopSession(envelope);
             return;
         }
 
@@ -255,6 +261,16 @@ public class AgentWebSocketClient extends WebSocketListener implements WebRtcSig
         );
     }
 
+    private void handleStopSession(AgentSignalEnvelope envelope) {
+        log.info("STOP_SESSION received. sessionId={}, viewerId={}, machineId={}",
+                envelope.getSessionId(), envelope.getViewerId(), envelope.getMachineId());
+
+        peerConnectionService.reset();
+        sessionState.clear();
+
+        log.info("Remote session stopped and local state cleared");
+    }
+
     @Override
     public void sendSdpAnswer(String sessionId, String machineId, String viewerId, String sdp) throws Exception {
         ensureSocketOpen();
@@ -311,6 +327,7 @@ public class AgentWebSocketClient extends WebSocketListener implements WebRtcSig
     public void onClosed(WebSocket webSocket, int code, String reason) {
         log.warn("WebSocket closed. code={}, reason={}", code, reason);
         peerConnectionService.reset();
+        sessionState.clear();
         scheduleReconnectIfNeeded();
     }
 
@@ -323,6 +340,7 @@ public class AgentWebSocketClient extends WebSocketListener implements WebRtcSig
         }
 
         peerConnectionService.reset();
+        sessionState.clear();
         scheduleReconnectIfNeeded();
     }
 

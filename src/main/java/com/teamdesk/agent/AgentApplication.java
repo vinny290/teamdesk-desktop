@@ -10,6 +10,7 @@ import com.teamdesk.agent.registration.HeartbeatService;
 import com.teamdesk.agent.registration.RegistrationClient;
 import com.teamdesk.agent.session.AgentSessionState;
 import com.teamdesk.agent.transport.AgentWebSocketClient;
+import com.teamdesk.agent.ui.AgentInfoWindow;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -44,6 +45,12 @@ public class AgentApplication {
                 heartbeatService.stop();
                 webSocketClient.close();
             }));
+
+            AgentInfoWindow infoWindow = new AgentInfoWindow(
+                    config.getMachineId(),
+                    config.getServerHttpBaseUrl()
+            );
+            infoWindow.show();
 
             log.info("Desktop agent started successfully. machineId={}", identityService.getMachineId());
         } catch (Exception e) {
