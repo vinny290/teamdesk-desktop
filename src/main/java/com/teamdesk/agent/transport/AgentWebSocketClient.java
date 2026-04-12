@@ -118,9 +118,13 @@ public class AgentWebSocketClient extends WebSocketListener {
                 envelope.getMachineId()
         );
 
+        log.info("Showing consent dialog for viewerId={}", envelope.getViewerId());
+
         boolean granted = consentService.requestConsent(
                 "Разрешить удалённое подключение для viewer: " + envelope.getViewerId() + "?"
         );
+
+        log.info("Consent dialog completed. granted={}, viewerId={}", granted, envelope.getViewerId());
 
         AgentSignalEnvelope response = new AgentSignalEnvelope();
         response.setType(granted ? "CONSENT_GRANTED" : "CONSENT_DECLINED");
