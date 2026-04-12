@@ -308,8 +308,8 @@ public class AgentPeerConnectionService implements PeerConnectionObserver {
         videoSource = new VideoDesktopSource();
 
         // Для первого стабильного запуска лучше начать с умеренных значений.
-        videoSource.setFrameRate(10);
-        videoSource.setMaxFrameSize(1280, 720);
+        videoSource.setFrameRate(60);
+        videoSource.setMaxFrameSize(1920, 1080);
 
         if (!screens.isEmpty()) {
             DesktopSource selectedScreen = screens.get(0);
