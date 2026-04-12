@@ -6,6 +6,7 @@ import dev.onvoid.webrtc.PeerConnectionFactory;
 import dev.onvoid.webrtc.PeerConnectionObserver;
 import dev.onvoid.webrtc.RTCAnswerOptions;
 import dev.onvoid.webrtc.RTCConfiguration;
+import dev.onvoid.webrtc.RTCDataChannel;
 import dev.onvoid.webrtc.RTCIceCandidate;
 import dev.onvoid.webrtc.RTCIceConnectionState;
 import dev.onvoid.webrtc.RTCIceGatheringState;
@@ -19,6 +20,12 @@ import dev.onvoid.webrtc.RTCSignalingState;
 import dev.onvoid.webrtc.RTCSdpType;
 import dev.onvoid.webrtc.SetSessionDescriptionObserver;
 import dev.onvoid.webrtc.media.MediaStream;
+import dev.onvoid.webrtc.media.MediaStreamTrack;
+import dev.onvoid.webrtc.media.video.VideoDesktopSource;
+import dev.onvoid.webrtc.media.video.VideoTrack;
+import dev.onvoid.webrtc.media.video.desktop.DesktopSource;
+import dev.onvoid.webrtc.media.video.desktop.ScreenCapturer;
+import dev.onvoid.webrtc.media.video.desktop.WindowCapturer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,6 +36,9 @@ public class AgentPeerConnectionService implements PeerConnectionObserver {
 
     private static final Logger log = LoggerFactory.getLogger(AgentPeerConnectionService.class);
 
+    private static final String VIDEO_TRACK_ID = "screen-video-0";
+    private static final String STREAM_ID = "screen-stream-0";
+
     private final AgentSessionState sessionState;
     private final WebRtcSignalSender signalSender;
     private final PeerConnectionFactory factory;
@@ -36,6 +46,9 @@ public class AgentPeerConnectionService implements PeerConnectionObserver {
     private final List<RemoteIceCandidate> pendingRemoteCandidates = new ArrayList<>();
 
     private volatile RTCPeerConnection peerConnection;
+    private volatile VideoDesktopSource videoSource;
+    private volatile VideoTrack videoTrack;
+
     private volatile String currentSessionId;
     private volatile String currentMachineId;
     private volatile String currentViewerId;
@@ -74,11 +87,12 @@ public class AgentPeerConnectionService implements PeerConnectionObserver {
             reset();
         }
 
-        ensurePeerCreated(sessionId, machineId, viewerId);
-
         currentSessionId = sessionId;
         currentMachineId = machineId;
         currentViewerId = viewerId;
+
+        ensurePeerCreated(sessionId, machineId, viewerId);
+        ensureDesktopVideoTrackCreated();
 
         sessionState.bindSession(sessionId, viewerId, machineId);
         sessionState.markSignalingReady();
@@ -221,6 +235,24 @@ public class AgentPeerConnectionService implements PeerConnectionObserver {
         currentMachineId = null;
         currentViewerId = null;
 
+        if (videoSource != null) {
+            try {
+                videoSource.stop();
+            } catch (Exception e) {
+                log.warn("Error while stopping video source", e);
+            }
+
+            try {
+                videoSource.dispose();
+            } catch (Exception e) {
+                log.warn("Error while disposing video source", e);
+            }
+
+            videoSource = null;
+        }
+
+        videoTrack = null;
+
         if (peerConnection != null) {
             try {
                 peerConnection.close();
@@ -229,6 +261,8 @@ public class AgentPeerConnectionService implements PeerConnectionObserver {
             }
             peerConnection = null;
         }
+
+        sessionState.markStreaming(false);
     }
 
     private void ensurePeerCreated(String sessionId, String machineId, String viewerId) {
@@ -250,6 +284,66 @@ public class AgentPeerConnectionService implements PeerConnectionObserver {
                 viewerId,
                 machineId
         );
+    }
+
+    private void ensureDesktopVideoTrackCreated() {
+        if (videoTrack != null) {
+            return;
+        }
+
+        List<DesktopSource> screens;
+        List<DesktopSource> windows;
+
+        try {
+            ScreenCapturer screenCapturer = new ScreenCapturer();
+            WindowCapturer windowCapturer = new WindowCapturer();
+
+            screens = screenCapturer.getDesktopSources();
+            windows = windowCapturer.getDesktopSources();
+
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to enumerate desktop sources", e);
+        }
+
+        videoSource = new VideoDesktopSource();
+
+        // Для первого стабильного запуска лучше начать с умеренных значений.
+        videoSource.setFrameRate(10);
+        videoSource.setMaxFrameSize(1280, 720);
+
+        if (!screens.isEmpty()) {
+            DesktopSource selectedScreen = screens.get(0);
+            log.info(
+                    "Selected screen for capture: title='{}', id={}",
+                    selectedScreen.title,
+                    selectedScreen.id
+            );
+            videoSource.setSourceId(selectedScreen.id, false);
+        } else if (!windows.isEmpty()) {
+            DesktopSource selectedWindow = windows.get(0);
+            log.info(
+                    "Selected window for capture: title='{}', id={}",
+                    selectedWindow.title,
+                    selectedWindow.id
+            );
+            videoSource.setSourceId(selectedWindow.id, true);
+        } else {
+            log.warn("No desktop sources found. Falling back to sourceId=0 (primary screen)");
+            videoSource.setSourceId(0, false);
+        }
+
+        videoSource.start();
+
+        videoTrack = factory.createVideoTrack(VIDEO_TRACK_ID, videoSource);
+
+        List<String> streamIds = new ArrayList<>();
+        streamIds.add(STREAM_ID);
+
+        peerConnection.addTrack(videoTrack, streamIds);
+
+        sessionState.markStreaming(true);
+
+        log.info("Desktop video source started and video track added");
     }
 
     private void flushPendingRemoteCandidates() {
@@ -332,7 +426,7 @@ public class AgentPeerConnectionService implements PeerConnectionObserver {
     }
 
     @Override
-    public void onDataChannel(dev.onvoid.webrtc.RTCDataChannel dataChannel) {
+    public void onDataChannel(RTCDataChannel dataChannel) {
         log.info("Data channel created: {}", dataChannel.getLabel());
     }
 
@@ -343,12 +437,18 @@ public class AgentPeerConnectionService implements PeerConnectionObserver {
 
     @Override
     public void onAddTrack(RTCRtpReceiver receiver, MediaStream[] mediaStreams) {
-        log.info("Track added from remote peer");
+        log.info("Track added from remote peer: {}", receiver.getTrack().getKind());
+    }
+
+    @Override
+    public void onRemoveTrack(RTCRtpReceiver receiver) {
+        log.info("Track removed from remote peer: {}", receiver.getTrack().getKind());
     }
 
     @Override
     public void onTrack(RTCRtpTransceiver transceiver) {
-        log.info("onTrack fired");
+        MediaStreamTrack track = transceiver.getReceiver().getTrack();
+        log.info("onTrack fired: {}", track.getKind());
     }
 
     private record RemoteIceCandidate(
