@@ -9,8 +9,12 @@ import com.teamdesk.agent.monitoring.SystemSnapshotService;
 import com.teamdesk.agent.transport.HttpClientFactory;
 import com.teamdesk.agent.util.JsonMapperFactory;
 import okhttp3.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class RegistrationClient {
+
+    private static final Logger log = LoggerFactory.getLogger(RegistrationClient.class);
 
     private final AgentConfig config;
     private final AgentIdentityService identityService;
@@ -49,8 +53,8 @@ public class RegistrationClient {
             }
         }
 
-        System.out.println("Machine registered");
-        System.out.println("Snapshot: " + objectMapper.writeValueAsString(snapshotService.collect()));
+        log.info("Machine registered. machineId={}", identityService.getMachineId());
+        log.info("System snapshot: {}", objectMapper.writeValueAsString(snapshotService.collect()));
     }
 
     public void heartbeat() throws Exception {
@@ -71,6 +75,6 @@ public class RegistrationClient {
             }
         }
 
-        System.out.println("Heartbeat sent");
+        log.debug("Heartbeat sent. machineId={}", identityService.getMachineId());
     }
 }

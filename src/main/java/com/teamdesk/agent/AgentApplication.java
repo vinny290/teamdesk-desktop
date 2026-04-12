@@ -7,6 +7,7 @@ import com.teamdesk.agent.identity.AgentIdentityService;
 import com.teamdesk.agent.monitoring.SystemSnapshotService;
 import com.teamdesk.agent.registration.HeartbeatService;
 import com.teamdesk.agent.registration.RegistrationClient;
+import com.teamdesk.agent.session.AgentSessionState;
 import com.teamdesk.agent.transport.AgentWebSocketClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,20 +23,29 @@ public class AgentApplication {
             AgentIdentityService identityService = new AgentIdentityService(config);
             ConsentService consentService = new ConsentService();
             SystemSnapshotService snapshotService = new SystemSnapshotService();
+            AgentSessionState sessionState = new AgentSessionState();
 
-            RegistrationClient registrationClient = new RegistrationClient(config, identityService, snapshotService);
+            RegistrationClient registrationClient =
+                    new RegistrationClient(config, identityService, snapshotService);
             registrationClient.register();
 
             AgentWebSocketClient webSocketClient =
-                    new AgentWebSocketClient(config, consentService);
+                    new AgentWebSocketClient(config, consentService, sessionState);
             webSocketClient.connect();
 
-            HeartbeatService heartbeatService = new HeartbeatService(config, registrationClient);
+            HeartbeatService heartbeatService =
+                    new HeartbeatService(config, registrationClient);
             heartbeatService.start();
+
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                log.info("Shutdown hook triggered");
+                heartbeatService.stop();
+                webSocketClient.close();
+            }));
 
             log.info("Desktop agent started successfully. machineId={}", identityService.getMachineId());
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Agent startup failed", e);
         }
     }
 }
