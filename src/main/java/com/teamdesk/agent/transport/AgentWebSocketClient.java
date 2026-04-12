@@ -8,6 +8,8 @@ import com.teamdesk.agent.dto.InputEventPayload;
 import com.teamdesk.agent.input.RemoteInputService;
 import com.teamdesk.agent.session.AgentSessionState;
 import com.teamdesk.agent.util.JsonMapperFactory;
+import com.teamdesk.agent.webrtc.AgentPeerConnectionService;
+import com.teamdesk.agent.webrtc.WebRtcSignalSender;
 import okhttp3.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,7 +18,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
-public class AgentWebSocketClient extends WebSocketListener {
+public class AgentWebSocketClient extends WebSocketListener implements WebRtcSignalSender {
 
     private static final Logger log = LoggerFactory.getLogger(AgentWebSocketClient.class);
 
@@ -24,6 +26,7 @@ public class AgentWebSocketClient extends WebSocketListener {
     private final ConsentService consentService;
     private final AgentSessionState sessionState;
     private final RemoteInputService remoteInputService;
+    private final AgentPeerConnectionService peerConnectionService;
     private final ObjectMapper objectMapper = JsonMapperFactory.create();
     private final OkHttpClient httpClient = HttpClientFactory.create();
     private final ScheduledExecutorService reconnectExecutor = Executors.newSingleThreadScheduledExecutor();
@@ -42,6 +45,7 @@ public class AgentWebSocketClient extends WebSocketListener {
         this.consentService = consentService;
         this.sessionState = sessionState;
         this.remoteInputService = remoteInputService;
+        this.peerConnectionService = new AgentPeerConnectionService(sessionState, this);
     }
 
     public synchronized void connect() {
@@ -64,6 +68,7 @@ public class AgentWebSocketClient extends WebSocketListener {
         }
 
         reconnectExecutor.shutdownNow();
+        peerConnectionService.reset();
     }
 
     @Override
@@ -110,8 +115,13 @@ public class AgentWebSocketClient extends WebSocketListener {
             return;
         }
 
-        if ("SDP_OFFER".equals(type) || "ICE_CANDIDATE".equals(type)) {
-            log.warn("WS message received but not implemented yet: {}", type);
+        if ("SDP_OFFER".equals(type)) {
+            handleSdpOffer(envelope);
+            return;
+        }
+
+        if ("ICE_CANDIDATE".equals(type)) {
+            handleIceCandidate(envelope);
             return;
         }
 
@@ -178,6 +188,120 @@ public class AgentWebSocketClient extends WebSocketListener {
         remoteInputService.handle(payload);
     }
 
+    private void handleSdpOffer(AgentSignalEnvelope envelope) throws Exception {
+        if (!sessionState.isConsentGranted()) {
+            log.warn("Ignoring SDP_OFFER because consent is not granted");
+            return;
+        }
+
+        if (isBlank(envelope.getSessionId())) {
+            log.warn("Ignoring SDP_OFFER because sessionId is empty");
+            return;
+        }
+
+        if (isBlank(envelope.getViewerId()) || isBlank(envelope.getMachineId()) || isBlank(envelope.getSdp())) {
+            log.warn("Ignoring invalid SDP_OFFER");
+            return;
+        }
+
+        log.info(
+                "Handling SDP_OFFER. sessionId={}, viewerId={}, machineId={}, sdpLength={}",
+                envelope.getSessionId(),
+                envelope.getViewerId(),
+                envelope.getMachineId(),
+                envelope.getSdp().length()
+        );
+
+        peerConnectionService.handleOffer(
+                envelope.getSessionId(),
+                envelope.getMachineId(),
+                envelope.getViewerId(),
+                envelope.getSdp()
+        );
+    }
+
+    private void handleIceCandidate(AgentSignalEnvelope envelope) {
+        if (!sessionState.isConsentGranted()) {
+            log.warn("Ignoring ICE_CANDIDATE because consent is not granted");
+            return;
+        }
+
+        if (isBlank(envelope.getSessionId())) {
+            log.warn("Ignoring ICE_CANDIDATE because sessionId is empty");
+            return;
+        }
+
+        if (isBlank(envelope.getViewerId()) || isBlank(envelope.getMachineId()) || isBlank(envelope.getCandidate())) {
+            log.warn("Ignoring invalid ICE_CANDIDATE");
+            return;
+        }
+
+        log.info(
+                "Handling remote ICE_CANDIDATE. sessionId={}, viewerId={}, machineId={}, sdpMid={}, sdpMLineIndex={}",
+                envelope.getSessionId(),
+                envelope.getViewerId(),
+                envelope.getMachineId(),
+                envelope.getSdpMid(),
+                envelope.getSdpMLineIndex()
+        );
+
+        peerConnectionService.handleRemoteIceCandidate(
+                envelope.getSessionId(),
+                envelope.getMachineId(),
+                envelope.getViewerId(),
+                envelope.getCandidate(),
+                envelope.getSdpMid(),
+                envelope.getSdpMLineIndex()
+        );
+    }
+
+    @Override
+    public void sendSdpAnswer(String sessionId, String machineId, String viewerId, String sdp) throws Exception {
+        ensureSocketOpen();
+
+        AgentSignalEnvelope envelope = new AgentSignalEnvelope();
+        envelope.setType("SDP_ANSWER");
+        envelope.setSessionId(sessionId);
+        envelope.setMachineId(machineId);
+        envelope.setViewerId(viewerId);
+        envelope.setSdp(sdp);
+
+        webSocket.send(objectMapper.writeValueAsString(envelope));
+
+        log.info(
+                "SDP_ANSWER sent. sessionId={}, viewerId={}, machineId={}, sdpLength={}",
+                sessionId, viewerId, machineId, sdp != null ? sdp.length() : 0
+        );
+    }
+
+    @Override
+    public void sendIceCandidate(
+            String sessionId,
+            String machineId,
+            String viewerId,
+            String candidate,
+            String sdpMid,
+            Integer sdpMLineIndex
+    ) throws Exception {
+        ensureSocketOpen();
+
+        AgentSignalEnvelope envelope = new AgentSignalEnvelope();
+        envelope.setType("ICE_CANDIDATE");
+        envelope.setSessionId(sessionId);
+        envelope.setMachineId(machineId);
+        envelope.setViewerId(viewerId);
+        envelope.setCandidate(candidate);
+        envelope.setSdpMid(sdpMid);
+        envelope.setSdpMLineIndex(sdpMLineIndex);
+
+        webSocket.send(objectMapper.writeValueAsString(envelope));
+
+        log.info(
+                "Local ICE_CANDIDATE sent. sessionId={}, viewerId={}, machineId={}, sdpMid={}, sdpMLineIndex={}",
+                sessionId, viewerId, machineId, sdpMid, sdpMLineIndex
+        );
+    }
+
     @Override
     public void onClosing(WebSocket webSocket, int code, String reason) {
         log.warn("WebSocket closing. code={}, reason={}", code, reason);
@@ -186,6 +310,7 @@ public class AgentWebSocketClient extends WebSocketListener {
     @Override
     public void onClosed(WebSocket webSocket, int code, String reason) {
         log.warn("WebSocket closed. code={}, reason={}", code, reason);
+        peerConnectionService.reset();
         scheduleReconnectIfNeeded();
     }
 
@@ -197,7 +322,14 @@ public class AgentWebSocketClient extends WebSocketListener {
             log.error("WebSocket failure without HTTP response", t);
         }
 
+        peerConnectionService.reset();
         scheduleReconnectIfNeeded();
+    }
+
+    private void ensureSocketOpen() {
+        if (webSocket == null) {
+            throw new IllegalStateException("WebSocket is not initialized");
+        }
     }
 
     private synchronized void scheduleReconnectIfNeeded() {

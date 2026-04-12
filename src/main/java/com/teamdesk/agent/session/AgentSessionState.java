@@ -7,8 +7,11 @@ public class AgentSessionState {
     private volatile String sessionId;
     private volatile String viewerId;
     private volatile String machineId;
+
     private final AtomicBoolean consentGranted = new AtomicBoolean(false);
     private final AtomicBoolean active = new AtomicBoolean(false);
+    private final AtomicBoolean signalingReady = new AtomicBoolean(false);
+    private final AtomicBoolean streaming = new AtomicBoolean(false);
 
     public String getSessionId() {
         return sessionId;
@@ -30,12 +33,28 @@ public class AgentSessionState {
         return active.get();
     }
 
+    public boolean isSignalingReady() {
+        return signalingReady.get();
+    }
+
+    public boolean isStreaming() {
+        return streaming.get();
+    }
+
     public synchronized void openPendingSession(String sessionId, String viewerId, String machineId) {
         this.sessionId = sessionId;
         this.viewerId = viewerId;
         this.machineId = machineId;
         this.consentGranted.set(false);
         this.active.set(false);
+        this.signalingReady.set(false);
+        this.streaming.set(false);
+    }
+
+    public synchronized void bindSession(String sessionId, String viewerId, String machineId) {
+        this.sessionId = sessionId;
+        this.viewerId = viewerId;
+        this.machineId = machineId;
     }
 
     public synchronized void markConsentGranted() {
@@ -45,10 +64,20 @@ public class AgentSessionState {
     public synchronized void markConsentDeclined() {
         this.consentGranted.set(false);
         this.active.set(false);
+        this.signalingReady.set(false);
+        this.streaming.set(false);
     }
 
     public synchronized void markActive() {
         this.active.set(true);
+    }
+
+    public synchronized void markSignalingReady() {
+        this.signalingReady.set(true);
+    }
+
+    public synchronized void markStreaming(boolean value) {
+        this.streaming.set(value);
     }
 
     public synchronized void clear() {
@@ -57,6 +86,8 @@ public class AgentSessionState {
         this.machineId = null;
         this.consentGranted.set(false);
         this.active.set(false);
+        this.signalingReady.set(false);
+        this.streaming.set(false);
     }
 
     public synchronized boolean matches(String sessionId, String viewerId, String machineId) {
@@ -80,6 +111,8 @@ public class AgentSessionState {
                 ", machineId='" + machineId + '\'' +
                 ", consentGranted=" + consentGranted.get() +
                 ", active=" + active.get() +
+                ", signalingReady=" + signalingReady.get() +
+                ", streaming=" + streaming.get() +
                 '}';
     }
 }
