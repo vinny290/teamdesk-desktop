@@ -28,12 +28,24 @@ public class AgentApplication {
             AgentSessionState sessionState = new AgentSessionState();
             RemoteInputService remoteInputService = new RemoteInputService();
 
+            AgentInfoWindow infoWindow = new AgentInfoWindow(
+                    config.getMachineId(),
+                    config.getServerHttpBaseUrl()
+            );
+            infoWindow.show();
+
             RegistrationClient registrationClient =
                     new RegistrationClient(config, identityService, snapshotService);
             registrationClient.register();
 
             AgentWebSocketClient webSocketClient =
-                    new AgentWebSocketClient(config, consentService, sessionState, remoteInputService);
+                    new AgentWebSocketClient(
+                            config,
+                            consentService,
+                            sessionState,
+                            remoteInputService,
+                            infoWindow
+                    );
             webSocketClient.connect();
 
             HeartbeatService heartbeatService =
@@ -45,12 +57,6 @@ public class AgentApplication {
                 heartbeatService.stop();
                 webSocketClient.close();
             }));
-
-            AgentInfoWindow infoWindow = new AgentInfoWindow(
-                    config.getMachineId(),
-                    config.getServerHttpBaseUrl()
-            );
-            infoWindow.show();
 
             log.info("Desktop agent started successfully. machineId={}", identityService.getMachineId());
         } catch (Exception e) {

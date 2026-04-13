@@ -7,6 +7,7 @@ import com.teamdesk.agent.dto.AgentSignalEnvelope;
 import com.teamdesk.agent.dto.InputEventPayload;
 import com.teamdesk.agent.input.RemoteInputService;
 import com.teamdesk.agent.session.AgentSessionState;
+import com.teamdesk.agent.ui.AgentInfoWindow;
 import com.teamdesk.agent.util.JsonMapperFactory;
 import com.teamdesk.agent.webrtc.AgentPeerConnectionService;
 import com.teamdesk.agent.webrtc.WebRtcSignalSender;
@@ -27,6 +28,7 @@ public class AgentWebSocketClient extends WebSocketListener implements WebRtcSig
     private final AgentSessionState sessionState;
     private final RemoteInputService remoteInputService;
     private final AgentPeerConnectionService peerConnectionService;
+    private final AgentInfoWindow infoWindow;
     private final ObjectMapper objectMapper = JsonMapperFactory.create();
     private final OkHttpClient httpClient = HttpClientFactory.create();
     private final ScheduledExecutorService reconnectExecutor = Executors.newSingleThreadScheduledExecutor();
@@ -39,12 +41,14 @@ public class AgentWebSocketClient extends WebSocketListener implements WebRtcSig
             AgentConfig config,
             ConsentService consentService,
             AgentSessionState sessionState,
-            RemoteInputService remoteInputService
+            RemoteInputService remoteInputService,
+            AgentInfoWindow infoWindow
     ) {
         this.config = config;
         this.consentService = consentService;
         this.sessionState = sessionState;
         this.remoteInputService = remoteInputService;
+        this.infoWindow = infoWindow;
         this.peerConnectionService = new AgentPeerConnectionService(sessionState, this);
     }
 
@@ -70,6 +74,7 @@ public class AgentWebSocketClient extends WebSocketListener implements WebRtcSig
         reconnectExecutor.shutdownNow();
         peerConnectionService.reset();
         sessionState.clear();
+        infoWindow.setViewerConnected(false, null);
     }
 
     @Override
@@ -165,9 +170,11 @@ public class AgentWebSocketClient extends WebSocketListener implements WebRtcSig
 
         if (granted) {
             sessionState.markConsentGranted();
+            infoWindow.setViewerConnected(true, envelope.getViewerId());
             log.info("Consent granted. state={}", sessionState);
         } else {
             sessionState.markConsentDeclined();
+            infoWindow.setViewerConnected(false, null);
             log.info("Consent declined. state={}", sessionState);
         }
 
@@ -267,6 +274,7 @@ public class AgentWebSocketClient extends WebSocketListener implements WebRtcSig
 
         peerConnectionService.reset();
         sessionState.clear();
+        infoWindow.setViewerConnected(false, null);
 
         log.info("Remote session stopped and local state cleared");
     }
@@ -328,6 +336,7 @@ public class AgentWebSocketClient extends WebSocketListener implements WebRtcSig
         log.warn("WebSocket closed. code={}, reason={}", code, reason);
         peerConnectionService.reset();
         sessionState.clear();
+        infoWindow.setViewerConnected(false, null);
         scheduleReconnectIfNeeded();
     }
 
@@ -341,6 +350,7 @@ public class AgentWebSocketClient extends WebSocketListener implements WebRtcSig
 
         peerConnectionService.reset();
         sessionState.clear();
+        infoWindow.setViewerConnected(false, null);
         scheduleReconnectIfNeeded();
     }
 
