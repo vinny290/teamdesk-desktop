@@ -1,6 +1,11 @@
 package com.teamdesk.agent.webrtc;
 
+import com.teamdesk.agent.monitoring.CpuInfoCollector;
 import com.teamdesk.agent.session.AgentSessionState;
+import com.teamdesk.agent.streaming.AdaptiveStreamingDecision;
+import com.teamdesk.agent.streaming.AdaptiveStreamingModel;
+import com.teamdesk.agent.streaming.NetworkQualityProbe;
+import com.teamdesk.agent.streaming.StreamingProfile;
 import dev.onvoid.webrtc.CreateSessionDescriptionObserver;
 import dev.onvoid.webrtc.PeerConnectionFactory;
 import dev.onvoid.webrtc.PeerConnectionObserver;
@@ -31,6 +36,9 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class AgentPeerConnectionService implements PeerConnectionObserver {
 
@@ -43,6 +51,11 @@ public class AgentPeerConnectionService implements PeerConnectionObserver {
     private final WebRtcSignalSender signalSender;
     private final PeerConnectionFactory factory;
 
+    private final AdaptiveStreamingModel adaptiveStreamingModel;
+    private final NetworkQualityProbe networkQualityProbe;
+    private final CpuInfoCollector cpuInfoCollector;
+    private final ScheduledExecutorService adaptiveExecutor;
+
     private final List<RemoteIceCandidate> pendingRemoteCandidates = new ArrayList<>();
 
     private volatile RTCPeerConnection peerConnection;
@@ -52,14 +65,21 @@ public class AgentPeerConnectionService implements PeerConnectionObserver {
     private volatile String currentSessionId;
     private volatile String currentMachineId;
     private volatile String currentViewerId;
+    private volatile StreamingProfile currentStreamingProfile;
 
     public AgentPeerConnectionService(
             AgentSessionState sessionState,
-            WebRtcSignalSender signalSender
+            WebRtcSignalSender signalSender,
+            String serverHttpBaseUrl
     ) {
         this.sessionState = sessionState;
         this.signalSender = signalSender;
         this.factory = new PeerConnectionFactory();
+
+        this.adaptiveStreamingModel = new AdaptiveStreamingModel();
+        this.networkQualityProbe = new NetworkQualityProbe(serverHttpBaseUrl);
+        this.cpuInfoCollector = new CpuInfoCollector();
+        this.adaptiveExecutor = Executors.newSingleThreadScheduledExecutor();
     }
 
     public synchronized void handleOffer(
@@ -234,6 +254,7 @@ public class AgentPeerConnectionService implements PeerConnectionObserver {
         currentSessionId = null;
         currentMachineId = null;
         currentViewerId = null;
+        currentStreamingProfile = null;
 
         if (videoSource != null) {
             try {
@@ -263,6 +284,11 @@ public class AgentPeerConnectionService implements PeerConnectionObserver {
         }
 
         sessionState.markStreaming(false);
+    }
+
+    public void shutdown() {
+        reset();
+        adaptiveExecutor.shutdownNow();
     }
 
     private void ensurePeerCreated(String sessionId, String machineId, String viewerId) {
@@ -300,16 +326,13 @@ public class AgentPeerConnectionService implements PeerConnectionObserver {
 
             screens = screenCapturer.getDesktopSources();
             windows = windowCapturer.getDesktopSources();
-
         } catch (Exception e) {
             throw new IllegalStateException("Failed to enumerate desktop sources", e);
         }
 
         videoSource = new VideoDesktopSource();
 
-        // Для первого стабильного запуска лучше начать с умеренных значений.
-        videoSource.setFrameRate(60);
-        videoSource.setMaxFrameSize(1920, 1080);
+        applyStreamingProfile(StreamingProfile.MEDIUM);
 
         if (!screens.isEmpty()) {
             DesktopSource selectedScreen = screens.get(0);
@@ -342,8 +365,59 @@ public class AgentPeerConnectionService implements PeerConnectionObserver {
         peerConnection.addTrack(videoTrack, streamIds);
 
         sessionState.markStreaming(true);
+        startAdaptiveLoop();
 
         log.info("Desktop video source started and video track added");
+    }
+
+    private void startAdaptiveLoop() {
+        adaptiveExecutor.scheduleAtFixedRate(() -> {
+            try {
+                if (videoSource == null || !sessionState.isStreaming()) {
+                    return;
+                }
+
+                networkQualityProbe.probe();
+
+                double latencyMs = networkQualityProbe.getAverageLatencyMs();
+                double packetLossPercent = networkQualityProbe.getPacketLossPercent();
+                double cpuLoadPercent = cpuInfoCollector.getLoad() * 100.0;
+
+                AdaptiveStreamingDecision decision = adaptiveStreamingModel.evaluate(
+                        latencyMs,
+                        packetLossPercent,
+                        cpuLoadPercent
+                );
+
+                if (currentStreamingProfile != decision.getProfile()) {
+                    applyStreamingProfile(decision.getProfile());
+                }
+
+                log.info("Adaptive streaming decision: {}", decision);
+            } catch (Exception e) {
+                log.warn("Adaptive streaming iteration failed: {}", e.getMessage(), e);
+            }
+        }, 0, 5, TimeUnit.SECONDS);
+    }
+
+    private synchronized void applyStreamingProfile(StreamingProfile profile) {
+        if (videoSource == null) {
+            currentStreamingProfile = profile;
+            return;
+        }
+
+        videoSource.setFrameRate(profile.getFps());
+        videoSource.setMaxFrameSize(profile.getWidth(), profile.getHeight());
+
+        currentStreamingProfile = profile;
+
+        log.info(
+                "Streaming profile applied: {} ({} FPS, {}x{})",
+                profile.name(),
+                profile.getFps(),
+                profile.getWidth(),
+                profile.getHeight()
+        );
     }
 
     private void flushPendingRemoteCandidates() {

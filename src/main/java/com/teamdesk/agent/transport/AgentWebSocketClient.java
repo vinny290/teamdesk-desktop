@@ -49,7 +49,11 @@ public class AgentWebSocketClient extends WebSocketListener implements WebRtcSig
         this.sessionState = sessionState;
         this.remoteInputService = remoteInputService;
         this.infoWindow = infoWindow;
-        this.peerConnectionService = new AgentPeerConnectionService(sessionState, this);
+        this.peerConnectionService = new AgentPeerConnectionService(
+                sessionState,
+                this,
+                config.getServerHttpBaseUrl()
+        );
     }
 
     public synchronized void connect() {
@@ -72,7 +76,7 @@ public class AgentWebSocketClient extends WebSocketListener implements WebRtcSig
         }
 
         reconnectExecutor.shutdownNow();
-        peerConnectionService.reset();
+        peerConnectionService.shutdown();
         sessionState.clear();
         infoWindow.setViewerConnected(false, null);
     }
